@@ -1,56 +1,183 @@
-# 🖼️ Image Captioning Project (CNN + RNN)
+# 📱 Second-Hand Mobile Price Analyzer
 
-This project implements an **Image Captioning system** that automatically generates textual descriptions for input images using a hybrid Deep Learning model combining **Convolutional Neural Networks (CNN)** and **Recurrent Neural Networks (RNN)**.
+## 📌 Project Overview
+This project aims to build an intelligent system that analyzes second-hand mobile listings in Egypt (e.g., OLX) and determines whether the price is:
 
-## 🚀 Overview
+- ✅ Fair
+- 🔥 Good Deal (Underpriced)
+- ❌ Overpriced
 
-The model takes an image as input, extracts its visual features using a pretrained CNN, and then generates a meaningful caption word-by-word using an RNN (LSTM).
+The system relies on:
+- 📷 Mobile images
+- 📝 Seller descriptions
+- 💰 Listed prices
 
-## 🧠 Model Architecture
+---
 
-* **CNN (Feature Extractor):**
+## 🎯 Objectives
+- Predict the **fair price** of a used mobile phone
+- Classify listings into pricing categories
+- Compare performance of multiple deep learning models
+- Build a real-world multimodal AI system
 
-  * Pretrained model (e.g., MobileNet / VGG16) to extract image features.
-* **RNN (Sequence Generator):**
+---
 
-  * LSTM network to generate captions based on extracted features.
+## 🕸️ Data Collection
+We use **web scraping** to collect data from online marketplaces.
 
-## 📊 Dataset
+### Collected Data:
+- Mobile images
+- Listing descriptions
+- Prices
 
-* Images and captions were collected using **web scraping techniques** (e.g., Reddit / image platforms).
-* The dataset was preprocessed by:
+### Steps:
+1. Scrape data from listing websites
+2. Clean and preprocess data
+3. Store in structured format (CSV / JSON)
 
-  * Resizing images
-  * Cleaning and tokenizing text
-  * Converting words into numerical sequences
+---
 
-## ⚙️ Technologies Used
+## 🧠 Models Used
 
-* Python
-* TensorFlow / Keras
-* NumPy, Pandas
-* BeautifulSoup / Requests (for web scraping)
-* NLTK (for text preprocessing)
+### 🖼️ Computer Vision Models
+- **CNN (Convolutional Neural Network)**  
+  - Built from scratch or using transfer learning  
+  - Predicts phone condition or price from images  
 
-## 🔍 Features
+- **Vision Transformer (ViT)**  
+  - Pre-trained model fine-tuned on our dataset  
+  - Compared against CNN performance  
 
-* Generate captions for unseen images
-* Simple and efficient architecture
-* Lightweight dataset for fast training
+---
 
-## 📈 Future Improvements
+### 📝 NLP Models
+- **LSTM (Long Short-Term Memory)**  
+  - Processes listing descriptions  
+  - Handles Arabic, slang, and Franco text  
 
-* Add Attention Mechanism for better caption quality
-* Increase dataset size for improved accuracy
-* Build a GUI for user interaction
+- **GRU (Gated Recurrent Unit)**  
+  - Lightweight alternative to LSTM  
+  - Used for comparison  
+
+---
+
+### 🔗 Multimodal Model
+- Combines:
+  - Image features (CNN / ViT)
+  - Text features (LSTM / GRU)
+- Uses Fully Connected layers to:
+  - Predict price
+  - Classify deal quality
+
+---
+
+## 🏷️ Labeling Strategy
+Listings are classified into:
+
+- 🔥 **Good Deal** → Price significantly lower than expected  
+- ✅ **Fair** → Price within normal range  
+- ❌ **Overpriced** → Price higher than expected  
+
+---
+
+## ⚙️ System Components
+
+### 1. Data Pipeline
+- Web scraping
+- Data cleaning
+- Data labeling
+
+### 2. Model Training
+- Image models (CNN, ViT)
+- Text models (LSTM, GRU)
+- Multimodal model
+
+### 3. API
+- Built using **Flask / FastAPI**
+- Accepts:
+  - Image
+  - Description
+  - Price
+- Returns:
+  - Predicted fair price
+  - Deal classification
+
+### 4. Demo
+- Simple UI using:
+  - Streamlit or Notebook
+
+---
+
+## 👥 Team Distribution
+
+### 👤 Member 1
+- CNN Model
+- Web Scraping
+- Data collection & cleaning
+
+### 👤 Member 2
+- Vision Transformer (ViT)
+- Image augmentation
+- Model evaluation
+
+### 👤 Member 3
+- LSTM Model
+- NLP pipeline (Arabic processing)
+
+### 👤 Member 4
+- GRU Model
+- Data labeling
+- Data preparation support
+
+### 👤 Member 5
+- Multimodal Model
+- API development
+- Demo preparation
+
+---
+
+## 📊 Evaluation Metrics
+
+### For Regression (Price Prediction):
+- MAE (Mean Absolute Error)
+- RMSE (Root Mean Squared Error)
+
+### For Classification:
+- Accuracy
+- Precision / Recall / F1-score
+
+---
+
+## 🚀 Future Improvements
+- Use larger dataset
+- Deploy as a web app
+- Add real-time scraping
+- Improve Arabic NLP handling
+
+---
+
+## 🛠️ Tech Stack
+- Python
+- TensorFlow / PyTorch
+- OpenCV
+- Transformers (Hugging Face)
+- BeautifulSoup / Scrapy
+- Flask / FastAPI
+- Streamlit
+
+---
 
 ## 📌 How to Run
 
-1. Clone the repository
-2. Install dependencies
-3. Run the training script
-4. Test the model on new images
+```bash
+# Clone repo
+git clone https://github.com/your-repo-name.git
 
-## 👨‍💻 Author
+# Install dependencies
+pip install -r requirements.txt
 
-Mohamed Elfoly
+# Run training
+python train.py
+
+# Run API
+python app.py
