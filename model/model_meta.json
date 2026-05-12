@@ -1,0 +1,14 @@
+{
+  "img_feat_dim": 768,
+  "txt_feat_dim": 64,
+  "total_dim": 832,
+  "label_map": {
+    "1": "Fair",
+    "2": "Overpriced"
+  },
+  "mae": 8943.2,
+  "r2": 0.4723,
+  "accuracy": 0.9023,
+  "n_train": 4172,
+  "n_test": 1044
+}
