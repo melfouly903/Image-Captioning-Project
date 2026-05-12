@@ -1,0 +1,292 @@
+"""
+demo_streamlit.py  ──  Multimodal Price Predictor Interactive Demo
+==================================================================
+Run:
+    python -m streamlit run demo_streamlit.py
+"""
+
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import joblib, os, json
+import requests
+from PIL import Image
+from io import BytesIO
+
+# ─────────────────────────────────────────────────────────────
+#  Page config
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Multimodal Price Predictor",
+    page_icon="📱",
+    layout="wide",
+)
+
+# ─────────────────────────────────────────────────────────────
+#  Load model
+# ─────────────────────────────────────────────────────────────
+@st.cache_resource
+def load_model():
+    MODEL_DIR = "model"
+    scaler      = joblib.load(os.path.join(MODEL_DIR, "scaler.pkl"))
+    price_model = joblib.load(os.path.join(MODEL_DIR, "price_regressor.pkl"))
+    label_model = joblib.load(os.path.join(MODEL_DIR, "label_classifier.pkl"))
+    with open(os.path.join(MODEL_DIR, "model_meta.json")) as f:
+        meta = json.load(f)
+    return scaler, price_model, label_model, meta
+
+@st.cache_data
+def load_data():
+    meta_df   = pd.read_csv("vit_image_features_meta.csv")
+    labeled   = pd.read_csv("labeled_dataset.csv")
+    img_feats = np.load("vit_image_features.npy")
+    txt_feats = np.load("gru_text_features.npy")
+    lid_to_txt = {r.listing_id: i for i, r in labeled.reset_index(drop=True).iterrows()}
+    meta_df["txt_idx"] = meta_df["listing_id"].map(lid_to_txt)
+    meta_df = meta_df.dropna(subset=["txt_idx"])
+    meta_df["txt_idx"] = meta_df["txt_idx"].astype(int)
+    return meta_df, labeled, img_feats, txt_feats
+
+def load_image_from_url(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            return Image.open(BytesIO(response.content))
+    except Exception:
+        pass
+    return None
+
+LABEL_MAP = {1: "Fair", 2: "Overpriced"}
+
+# ─────────────────────────────────────────────────────────────
+#  Load everything
+# ─────────────────────────────────────────────────────────────
+try:
+    scaler, price_model, label_model, model_meta = load_model()
+    meta_df, labeled_df, img_feats, txt_feats    = load_data()
+except Exception as e:
+    st.error(f"Could not load model or data: {e}")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────
+#  Header
+# ─────────────────────────────────────────────────────────────
+st.title("📱 Multimodal Mobile Price Predictor")
+st.markdown(
+    "Combines **ViT image features** `(768-dim)` + **GRU text features** `(64-dim)` "
+    "→ Fully-Connected MLP → **Predicted Price (EGP)** + **Valuation Label**"
+)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Fusion",       "Early Concat")
+c2.metric("Feature Dim",  "832 (768+64)")
+c3.metric("Price MAE",    f"{model_meta.get('mae',0):,.0f} EGP")
+c4.metric("R²",           f"{model_meta.get('r2',0):.4f}")
+c5.metric("Clf Accuracy", f"{model_meta.get('accuracy',0):.2%}")
+st.divider()
+
+# ─────────────────────────────────────────────────────────────
+#  Sidebar
+# ─────────────────────────────────────────────────────────────
+st.sidebar.title("Options")
+mode = st.sidebar.radio("Demo Mode", ["Single Listing", "Batch Evaluation"])
+
+# ═════════════════════════════════════════════════════════════
+#  MODE 1 — Single Listing
+# ═════════════════════════════════════════════════════════════
+if mode == "Single Listing":
+
+    st.subheader("Single Listing Inference")
+
+    # ── Search controls ───────────────────────────────────────
+    total = len(meta_df)
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 1, 1])
+
+    with ctrl1:
+        all_ids = meta_df["listing_id"].astype(str).tolist()
+        search_id = st.selectbox("🔎 Search by Listing ID", options=all_ids,
+                                  index=0, help="Type to search a listing ID")
+        idx = meta_df[meta_df["listing_id"].astype(str) == search_id].index[0]
+        idx = int(meta_df.index.get_loc(idx))
+
+    with ctrl2:
+        jump = st.number_input("Jump to index", min_value=0,
+                               max_value=total - 1, value=idx, step=1)
+        idx = int(jump)
+
+    with ctrl3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🎲 Random"):
+            idx = int(np.random.randint(0, total))
+
+    st.caption(f"Showing listing **{idx + 1}** of **{total:,}**")
+    row = meta_df.iloc[idx]
+
+    listing_id   = int(row["listing_id"])
+    actual_price = float(row["price_egp"])
+    actual_label = LABEL_MAP.get(int(row["label_int"]), str(row["label_int"]))
+    img_vec      = img_feats[int(row["feat_index"])]
+    txt_vec      = txt_feats[int(row["txt_idx"])]
+    image_url    = str(row.get("image_url", ""))
+
+    desc_row    = labeled_df[labeled_df["listing_id"] == listing_id]
+    brand       = desc_row.iloc[0]["brand"]       if not desc_row.empty else "—"
+    description = desc_row.iloc[0]["description"] if not desc_row.empty else "—"
+
+    col_photo, col_info, col_result = st.columns([1, 1.2, 1.5])
+
+    with col_photo:
+        st.markdown("#### Photo")
+        if image_url and image_url != "nan":
+            with st.spinner("Loading image..."):
+                img = load_image_from_url(image_url)
+            if img:
+                st.image(img, use_container_width=True)
+            else:
+                st.info("Image not available")
+        else:
+            st.info("No image URL")
+
+    with col_info:
+        st.markdown("#### Listing Info")
+        st.markdown(f"**ID:** `{listing_id}`")
+        st.markdown(f"**Brand:** {brand}")
+        st.markdown(f"**Description:** {str(description)[:150]}")
+        st.markdown(f"**Actual Price:** `{actual_price:,.0f} EGP`")
+        icon = "🟢" if actual_label == "Fair" else "🔴"
+        st.markdown(f"**Actual Label:** {icon} `{actual_label}`")
+
+    with col_result:
+        st.markdown("#### Prediction")
+        if st.button("Run Prediction", type="primary"):
+            fused      = np.concatenate([img_vec, txt_vec]).reshape(1, -1)
+            fused_s    = scaler.transform(fused)
+            pred_price = float(price_model.predict(fused_s)[0])
+            pred_int   = int(label_model.predict(fused_s)[0])
+            confidence = float(label_model.predict_proba(fused_s)[0].max())
+            pred_str   = LABEL_MAP.get(pred_int, str(pred_int))
+            diff       = pred_price - actual_price
+            pct_err    = abs(diff) / actual_price * 100
+
+            card_color = "#1a472a" if pred_str == "Fair" else "#7b1a1a"
+            label_icon = "🟢" if pred_str == "Fair" else "🔴"
+
+            st.markdown(f"""
+            <div style="background:{card_color};padding:20px;border-radius:12px;margin-top:8px">
+                <h3 style="color:white;margin:0">{label_icon} {pred_str}</h3>
+                <h2 style="color:white;margin:6px 0">{pred_price:,.0f} EGP</h2>
+                <p style="color:#ccc;margin:2px 0">Confidence: {confidence:.2%}</p>
+                <p style="color:#ccc;margin:2px 0">Difference: {diff:+,.0f} EGP ({pct_err:.1f}%)</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("**Feature Activations**")
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 3.5))
+            groups = img_vec.reshape(32, 24)
+            ax1.bar(range(32), np.abs(groups).mean(axis=1), color="#4A90D9", width=0.9)
+            ax1.set_title("ViT Image Features (32 groups)", fontsize=8)
+            ax2.bar(range(len(txt_vec)), np.abs(txt_vec), color="#E67E22", width=0.9)
+            ax2.set_title("GRU Text Features (64 dims)", fontsize=8)
+            plt.tight_layout()
+            st.pyplot(fig)
+
+# ═════════════════════════════════════════════════════════════
+#  MODE 2 — Batch Evaluation
+# ═════════════════════════════════════════════════════════════
+else:
+    st.subheader("Batch Evaluation")
+
+    n    = st.sidebar.slider("Sample size", 20, 300, 100, step=10)
+    seed = st.sidebar.number_input("Random seed", value=42)
+
+    if st.button("Run Batch Evaluation", type="primary"):
+
+        sample    = meta_df.sample(n=n, random_state=int(seed)).reset_index(drop=True)
+        img_batch = img_feats[sample["feat_index"].values]
+        txt_batch = txt_feats[sample["txt_idx"].values]
+        X         = np.concatenate([img_batch, txt_batch], axis=1)
+        X_s       = scaler.transform(X)
+
+        pred_prices = price_model.predict(X_s)
+        pred_labels = label_model.predict(X_s)
+        confidence  = label_model.predict_proba(X_s).max(axis=1)
+
+        results = pd.DataFrame({
+            "listing_id":           sample["listing_id"].values,
+            "brand":                sample["brand"].values,
+            "actual_price_egp":     sample["price_egp"].values,
+            "predicted_price_egp":  np.round(pred_prices, 0),
+            "actual_label":         sample["label_int"].map(LABEL_MAP),
+            "predicted_label":      [LABEL_MAP.get(int(l), str(l)) for l in pred_labels],
+            "confidence":           np.round(confidence, 3),
+            "image_url":            sample["image_url"].values,
+        })
+        results["error_egp"] = (results["predicted_price_egp"] - results["actual_price_egp"]).round(0)
+        results["correct"]   = results["actual_label"] == results["predicted_label"]
+
+        acc = results["correct"].mean()
+        mae = results["error_egp"].abs().mean()
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Label Accuracy",  f"{acc:.2%}")
+        m2.metric("Price MAE",       f"{mae:,.0f} EGP")
+        m3.metric("Correct Labels",  f"{results['correct'].sum()} / {n}")
+
+        # Plots
+        fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+
+        c_map = results["predicted_label"].map({"Fair": "#4CAF50", "Overpriced": "#F44336"})
+        axes[0].scatter(results["actual_price_egp"], results["predicted_price_egp"],
+                        c=c_map, alpha=0.5, s=20, edgecolors="none")
+        lim = max(results["actual_price_egp"].max(), results["predicted_price_egp"].max()) * 1.05
+        axes[0].plot([0, lim], [0, lim], "k--", lw=1.5)
+        axes[0].set_xlabel("Actual Price (EGP)"); axes[0].set_ylabel("Predicted Price (EGP)")
+        axes[0].set_title("Actual vs Predicted Price", fontweight="bold")
+        fair_patch = mpatches.Patch(color="#4CAF50", label="Fair")
+        over_patch = mpatches.Patch(color="#F44336", label="Overpriced")
+        axes[0].legend(handles=[fair_patch, over_patch], loc="upper left", fontsize=8)
+
+        axes[1].hist(results["error_egp"], bins=30, color="#9B59B6", edgecolor="none", alpha=0.85)
+        axes[1].axvline(0, color="black", lw=1.5, linestyle="--")
+        axes[1].axvline( mae, color="red", lw=1.2, linestyle="--", label=f"MAE={mae:,.0f}")
+        axes[1].axvline(-mae, color="red", lw=1.2, linestyle="--")
+        axes[1].set_title("Prediction Error Distribution", fontweight="bold")
+        axes[1].set_xlabel("Error (EGP)"); axes[1].legend()
+
+        breakdown = results.groupby(["actual_label", "correct"]).size().unstack(fill_value=0)
+        breakdown.rename(columns={False: "Wrong", True: "Correct"}, inplace=True)
+        clrs = []
+        if "Wrong"   in breakdown.columns: clrs.append("#F44336")
+        if "Correct" in breakdown.columns: clrs.append("#4CAF50")
+        breakdown.plot(kind="bar", ax=axes[2], color=clrs, edgecolor="none")
+        axes[2].set_title("Classification by Actual Label", fontweight="bold")
+        axes[2].set_xlabel(""); axes[2].tick_params(axis="x", rotation=0)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+
+        # Show top 6 listings with photos
+        st.markdown("#### Sample Listings with Photos")
+        cols = st.columns(6)
+        for i in range(min(6, len(results))):
+            with cols[i]:
+                url = str(results.iloc[i]["image_url"])
+                if url and url != "nan":
+                    img = load_image_from_url(url)
+                    if img:
+                        st.image(img, use_container_width=True)
+                    else:
+                        st.markdown("📷")
+                pred_l = results.iloc[i]["predicted_label"]
+                pred_p = results.iloc[i]["predicted_price_egp"]
+                icon   = "🟢" if pred_l == "Fair" else "🔴"
+                st.caption(f"{icon} {pred_l}")
+                st.caption(f"{pred_p:,.0f} EGP")
+
+        st.markdown("#### Full Results Table")
+        st.dataframe(results.drop(columns=["correct", "image_url"]).head(50),
+                     use_container_width=True)

@@ -1,0 +1,189 @@
+"""
+api.py  ──  Multimodal Price Prediction REST API
+=================================================
+Run in VS Code terminal:
+    pip install flask scikit-learn joblib numpy pandas
+    python api.py
+
+Endpoints:
+    GET  /health           →  server + model status
+    GET  /model/info       →  model metrics & metadata
+    POST /predict          →  single listing prediction
+    POST /predict/batch    →  batch prediction (up to 100)
+
+Example cURL (copy-paste into terminal):
+    curl http://localhost:5000/health
+"""
+
+from __future__ import annotations
+import os, json, time
+import numpy as np
+import joblib
+from flask import Flask, request, jsonify
+
+# ─────────────────────────────────────────────────────────────
+#  Constants
+# ─────────────────────────────────────────────────────────────
+IMG_DIM   = 768
+TXT_DIM   = 64
+MODEL_DIR = os.environ.get("MODEL_DIR", "model")
+LABEL_MAP = {"1": "Fair", "2": "Overpriced"}
+
+# ─────────────────────────────────────────────────────────────
+#  Load model artefacts at startup
+# ─────────────────────────────────────────────────────────────
+print(f"[API] Loading model from '{MODEL_DIR}/' ...")
+try:
+    scaler      = joblib.load(os.path.join(MODEL_DIR, "scaler.pkl"))
+    price_model = joblib.load(os.path.join(MODEL_DIR, "price_regressor.pkl"))
+    label_model = joblib.load(os.path.join(MODEL_DIR, "label_classifier.pkl"))
+    with open(os.path.join(MODEL_DIR, "model_meta.json")) as f:
+        MODEL_META = json.load(f)
+    MODEL_LOADED = True
+    print("[API] Model loaded  MAE={mae:,.0f} EGP  R2={r2}  Acc={accuracy:.2%}".format(**MODEL_META))
+except Exception as e:
+    MODEL_LOADED = False
+    MODEL_ERROR  = str(e)
+    print(f"[API] Model load FAILED: {e}")
+
+# ─────────────────────────────────────────────────────────────
+#  App
+# ─────────────────────────────────────────────────────────────
+app = Flask(__name__)
+
+def api_error(msg: str, code: int = 400):
+    return jsonify({"error": msg}), code
+
+def validate_features(data: dict):
+    for key, dim in [("img_features", IMG_DIM), ("txt_features", TXT_DIM)]:
+        if key not in data:
+            return None, None, f"Missing '{key}'"
+    try:
+        img = np.array(data["img_features"], dtype=np.float32)
+        txt = np.array(data["txt_features"], dtype=np.float32)
+    except (TypeError, ValueError):
+        return None, None, "Features must be numeric arrays"
+    if img.shape != (IMG_DIM,):
+        return None, None, f"'img_features' must have {IMG_DIM} values, got {img.shape[0]}"
+    if txt.shape != (TXT_DIM,):
+        return None, None, f"'txt_features' must have {TXT_DIM} values, got {txt.shape[0]}"
+    return img, txt, None
+
+def run_inference(img_vec, txt_vec):
+    fused   = np.concatenate([img_vec, txt_vec]).reshape(1, -1)
+    fused_s = scaler.transform(fused)
+    price   = float(price_model.predict(fused_s)[0])
+    label   = int(label_model.predict(fused_s)[0])
+    proba   = float(label_model.predict_proba(fused_s)[0].max())
+    return {
+        "predicted_price_egp": round(price, 2),
+        "predicted_label":     LABEL_MAP.get(str(label), str(label)),
+        "confidence":          round(proba, 4),
+    }
+
+# ── Routes ────────────────────────────────────────────────────
+
+@app.get("/")
+def index():
+    return jsonify({
+        "api":       "Multimodal Price Prediction",
+        "version":   "1.0.0",
+        "endpoints": ["/health", "/model/info",
+                      "POST /predict", "POST /predict/batch"],
+    })
+
+@app.get("/health")
+def health():
+    return jsonify({
+        "status":       "ok" if MODEL_LOADED else "degraded",
+        "model_loaded": MODEL_LOADED,
+        "timestamp":    time.time(),
+    }), 200 if MODEL_LOADED else 503
+
+@app.get("/model/info")
+def model_info():
+    if not MODEL_LOADED:
+        return api_error("Model not loaded", 503)
+    return jsonify(MODEL_META)
+
+@app.post("/predict")
+def predict():
+    """
+    Body:  { "listing_id": "optional",
+             "img_features": [768 floats],
+             "txt_features": [64 floats] }
+    Returns predicted price (EGP) + label + confidence.
+    """
+    if not MODEL_LOADED:
+        return api_error("Model not loaded", 503)
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return api_error("Body must be JSON")
+    img, txt, err = validate_features(data)
+    if err:
+        return api_error(err)
+    t0 = time.perf_counter()
+    result = run_inference(img, txt)
+    ms = round((time.perf_counter() - t0) * 1000, 2)
+    return jsonify({"listing_id": data.get("listing_id", ""), **result,
+                    "inference_ms": ms})
+
+@app.post("/predict/batch")
+def predict_batch():
+    """
+    Body:  { "listings": [ {listing_id, img_features, txt_features}, ... ] }
+    Max 100 listings per request.
+    """
+    if not MODEL_LOADED:
+        return api_error("Model not loaded", 503)
+    data = request.get_json(force=True, silent=True)
+    if not data or "listings" not in data:
+        return api_error("Expected JSON with a 'listings' array")
+    listings = data["listings"]
+    if not isinstance(listings, list) or len(listings) == 0:
+        return api_error("'listings' must be a non-empty array")
+    if len(listings) > 100:
+        return api_error("Batch size limited to 100")
+
+    img_list, txt_list, ids = [], [], []
+    for i, item in enumerate(listings):
+        img, txt, err = validate_features(item)
+        if err:
+            return api_error(f"listings[{i}]: {err}")
+        img_list.append(img); txt_list.append(txt)
+        ids.append(item.get("listing_id", str(i)))
+
+    X   = np.concatenate([np.stack(img_list), np.stack(txt_list)], axis=1)
+    X_s = scaler.transform(X)
+    t0     = time.perf_counter()
+    prices = price_model.predict(X_s)
+    labels = label_model.predict(X_s)
+    probs  = label_model.predict_proba(X_s).max(axis=1)
+    ms     = round((time.perf_counter() - t0) * 1000, 2)
+
+    return jsonify({
+        "results": [
+            {"listing_id":           lid,
+             "predicted_price_egp":  round(float(p), 2),
+             "predicted_label":      LABEL_MAP.get(str(int(l)), str(l)),
+             "confidence":           round(float(pr), 4)}
+            for lid, p, l, pr in zip(ids, prices, labels, probs)
+        ],
+        "count": len(ids),
+        "total_inference_ms": ms,
+    })
+
+@app.errorhandler(404)
+def not_found(_):  return jsonify({"error": "Not found"}), 404
+@app.errorhandler(405)
+def bad_method(_): return jsonify({"error": "Method not allowed"}), 405
+
+# ── Start ─────────────────────────────────────────────────────
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print(f"\n  Swagger-style routes")
+    print(f"  GET  http://localhost:{port}/health")
+    print(f"  GET  http://localhost:{port}/model/info")
+    print(f"  POST http://localhost:{port}/predict")
+    print(f"  POST http://localhost:{port}/predict/batch\n")
+    app.run(host="0.0.0.0", port=port, debug=True)
